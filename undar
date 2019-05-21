@@ -1,0 +1,99 @@
+#!/usr/bin/python3
+""" undar
+Unpack files from some DAR archive.
+
+NOTE:
+    Some entries are containers (perhaps "directories" for files).
+    There's a 0x10 byte header, where the first word is the number of entries.
+    A list of 0x10 entries follows, of the form:
+        struct entry { u32 off; u32 size; ...  };
+"""
+
+from struct import pack, unpack
+from hexdump import hexdump
+import math
+import zlib
+
+DAR_BLK_SIZE = 0
+OUTPUT_PATH = "/tmp/data/{}.{}"
+
+# Apparently some of the .bin files appear to be containers for multiple files
+# (perhaps "directories" is a good word for it). 0x10 byte header, where the 
+# first word is the number of entries. Each entry is 0x10 bytes and looks 
+# something like { u32 off; u32 size; ...?} ...
+
+def get_extension(data):
+    """ Get a suitable file extension """
+        if (data[0:4] == b'GXT\x00'):
+            return "gxt"
+        elif (data[0:4] == b'RIFF'):
+            return "riff"
+        elif (data[0:4] == b'INAS'):
+            return "inas"
+        else:
+            return "bin"
+
+def get_entry(data, size, lzsize, offset, name, compressed=True):
+    print("##### Entry {} ####################".format(name))
+
+    cur = 0
+    if (compressed == True):
+        blk_data = bytearray()
+        num_blk = size // DAR_BLK_SIZE
+        cur_blk = 0
+        if ((size % 0x10000) < DAR_BLK_SIZE):
+            num_blk += 1
+
+        # Decompress data block-by-block
+        while True:
+            if (len(blk_data) >= size):
+                break
+            blk_size, blk_lzsize = unpack("<II", data[cur:cur+0x08])
+            if ((blk_size != 0x10000) and (cur_blk != num_blk-1)):
+                print("size={:08x} lzsize={:08x} num_blk={}".format(size, lzsize, num_blk))
+                print(hexdump(data[cur:cur+0x20]))
+            blk_lzsize_aligned = (math.ceil(blk_lzsize / 0x10) * 0x10) + 0x10
+            blk_data += zlib.decompress(data[cur+0x10:cur+0x10+blk_lzsize])
+            cur += blk_lzsize_aligned
+            cur_blk += 1
+
+        # Write decompressed file to disk
+        filename = OUTPUT_PATH.format(name, get_extension(blk_data))
+        with open(filename, "wb") as f:
+            f.write(blk_data)
+            print("Wrote decompressed file to {}".format(filename))
+
+    # Just write non-compressed files directly to disk
+    elif (compressed == False):
+        filename = OUTPUT_PATH.format(name, get_extension(data))
+        with open(filename, "wb") as f:
+            f.write(data)
+            print("Wrote flat file to {}".format(filename))
+
+""" ---------------------------------------------------------------------------
+"""
+
+# Read some .dar archive into memory
+with open("data.dar", "rb") as f:
+    raw_data = f.read()
+
+# Get the number of files in the archive
+DAR_BLK_SIZE, num_files = unpack("<LL", raw_data[0x04:0x0c])
+cur = 0x10
+
+# Iterate over all entries in the archive
+for i in range(0, num_files):
+    size, lzsize, offset = unpack("<LLQ", raw_data[cur:cur+0x10])
+
+    if (lzsize == 0):
+        filename = "{:04d}".format(i)
+        get_entry(raw_data[offset:offset+size], size, lzsize, offset, 
+                filename, compressed=False)
+    else:
+        filename = "{:04d}".format(i)
+        get_entry(raw_data[offset:offset+lzsize], size, lzsize, offset, 
+                filename, compressed=True)
+
+    # Move to the next file entry
+    cur += 0x20
+
