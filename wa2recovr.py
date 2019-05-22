@@ -1,5 +1,20 @@
 #!/usr/bin/python3
-""" wa2recovr
+""" wa2recovr.py
+Example usage:
+```
+    #!/usr/bin/python3
+    from wa2recovr import *
+
+    # Read an executable
+    elf = binary(argv[1])
+
+    # Extract entries
+    entries = elf.walk_entries()
+
+    for entry in entries:
+        # Do something useful
+        # ...
+```
 """
 
 from sys import argv
@@ -22,6 +37,7 @@ Containers for objects
 class binary(object):
     """ Simple container/parser for the binary """
     def __init__(self, filename):
+        self.filename = filename
 
         # Assume the entry table starts here
         self.table_base_off = 0x00075ef0
@@ -85,8 +101,8 @@ class binary(object):
 
             # Read the header for this block
             blk_size, blk_lzsize = unpack("<II", self.data[cur:cur+0x08])
-            hdprint("Block header:", self.data[cur:cur+0x10])
-            print("lzsize={:08x} blk_lzsize={:08x}".format(lzsize, blk_lzsize))
+            #hdprint("Block header:", self.data[cur:cur+0x10])
+            #print("lzsize={:08x} blk_lzsize={:08x}".format(lzsize, blk_lzsize))
 
             # Decompress this block of data
             blk_data += decompress(self.data[cur+0x10:cur+0x10+blk_lzsize])
@@ -94,7 +110,7 @@ class binary(object):
             # Move to the next block
             blk_lzsize_aligned = (math.ceil(blk_lzsize / 0x10) * 0x10) + 0x10
             cur += blk_lzsize_aligned
-            print("{:08x}/{:08x} bytes read".format(len(blk_data), size))
+            #print("{:08x}/{:08x} bytes read".format(len(blk_data), size))
 
         return blk_data
 
@@ -111,15 +127,15 @@ class binary(object):
             # Recover the filename for this entry
             filename = self._recover_string(saddr)
             filename = filename.replace("_", ".")
-            print("[*] '{}': {}={:08x} {}={:08x}".format(filename, 'size', size, 
-                    'lzsize', lzsize))
+            #print("[*] '{}': {}={:08x} {}={:08x}".format(filename, 'size', size, 
+            #        'lzsize', lzsize))
 
             # Decompress the data for this entry
             entry_data = self._recover_file(size, lzsize, daddr, filename)
-            hdprint("File header", entry_data[0:0x20])
+            #hdprint("File header", entry_data[0:0x20])
 
             # Append the entry to our list, then move to the next entry
-            entry = file_entry(filename, entry_data)
+            entry = file_entry(filename, entry_data, saddr, daddr, size, lzsize)
             self.entries.append(entry)
             cur += 0x10
 
@@ -128,24 +144,16 @@ class binary(object):
 
 class file_entry(object):
     """ Simple container for file entries """
-    def __init__(self, filename, data):
+    def __init__(self, filename, data, saddr, daddr, size, lzsize):
         self.filename = filename
         self.data = data
+        self.saddr = saddr
+        self.daddr = daddr
+        self.size = size
+        self.lzsize = lzsize
 
     def write(self, path):
         """ Write the file to some folder """
-        with open("{}/{}".format(path, filename)) as f:
+        with open("{}/{}".format(path, self.filename), "wb") as f:
             f.write(self.data)
 
-
-""" ---------------------------------------------------------------------------
-Actual main routine goes here
-"""
-
-if (len(argv) < 2):
-    print("usage: wa2recovr <filename>")
-    exit()
-
-# Produce a list of file objects
-elf = binary(argv[1])
-entries = elf.walk_entries()
