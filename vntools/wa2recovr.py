@@ -109,8 +109,6 @@ class binary(object):
 
             # Read the header for this block
             blk_size, blk_lzsize = unpack("<II", self.data[cur:cur+0x08])
-            #hdprint("Block header:", self.data[cur:cur+0x10])
-            #print("lzsize={:08x} blk_lzsize={:08x}".format(lzsize, blk_lzsize))
 
             # Decompress this block of data
             blk_data += decompress(self.data[cur+0x10:cur+0x10+blk_lzsize])
@@ -118,12 +116,11 @@ class binary(object):
             # Move to the next block
             blk_lzsize_aligned = (ceil(blk_lzsize / 0x10) * 0x10) + 0x10
             cur += blk_lzsize_aligned
-            #print("{:08x}/{:08x} bytes read".format(len(blk_data), size))
 
         return blk_data
 
     def walk_entries(self):
-        """ Given an offset, extract and return an array of all file objects """
+        """ Given an offset, extract and return an array of all files """
         cur = self.table_base_off
         while True:
 
@@ -135,12 +132,9 @@ class binary(object):
             # Recover the filename for this entry
             filename = self._recover_string(saddr)
             filename = filename.replace("_", ".")
-            #print("[*] '{}': {}={:08x} {}={:08x}".format(filename, 'size', size, 
-            #        'lzsize', lzsize))
 
             # Decompress the data for this entry
             entry_data = self._recover_file(size, lzsize, daddr, filename)
-            #hdprint("File header", entry_data[0:0x20])
 
             # Append the entry to our list, then move to the next entry
             entry = file_entry(filename, entry_data, saddr, daddr, size, lzsize)

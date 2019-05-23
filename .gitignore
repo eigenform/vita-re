@@ -3,5 +3,6 @@
 !vntools/
 !vntools/sc3parse.py
 !vntools/wa2recovr.py
+!vntools/wa2txt.py
 !vntools/psvself.py
 !undar
