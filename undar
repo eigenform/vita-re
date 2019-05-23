@@ -11,16 +11,12 @@ NOTE:
 
 from struct import pack, unpack
 from hexdump import hexdump
+from sys import argv
 import math
 import zlib
 
 DAR_BLK_SIZE = 0
 OUTPUT_PATH = "/tmp/data/{}.{}"
-
-# Apparently some of the .bin files appear to be containers for multiple files
-# (perhaps "directories" is a good word for it). 0x10 byte header, where the 
-# first word is the number of entries. Each entry is 0x10 bytes and looks 
-# something like { u32 off; u32 size; ...?} ...
 
 def get_extension(data):
     """ Get a suitable file extension """
@@ -70,11 +66,13 @@ def get_entry(data, size, lzsize, offset, name, compressed=True):
             f.write(data)
             print("Wrote flat file to {}".format(filename))
 
-""" ---------------------------------------------------------------------------
-"""
+
+if (len(argv) < 2):
+    print("usage: undar <.dar file>")
+    exit()
 
 # Read some .dar archive into memory
-with open("data.dar", "rb") as f:
+with open(argv[1], "rb") as f:
     raw_data = f.read()
 
 # Get the number of files in the archive

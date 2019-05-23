@@ -21,7 +21,9 @@ from sys import argv
 from struct import pack, unpack
 from hexdump import hexdump
 from zlib import decompress
-import math
+from math import ceil
+
+from psvself import *
 
 def hdprint(desc, data):
     """ Wrapper around hexdump output """
@@ -43,17 +45,18 @@ class binary(object):
         self.table_base_off = 0x00075ef0
         self.entries = []
 
-        # Assume the following geometry for ELF segments
-        self.t_addr   = 0x81000000
-        self.t_len    = 0x00078a40
-        self.t_off    = 0x000000c0
-        self.d_addr   = 0x81079000
-        self.d_len    = 0x003d4584
-        self.d_off    = 0x00078b00
-
-        # Read the ELF file into memory
+        # Read an ELF file into memory
         with open(filename, "rb") as f: 
             self.data = f.read()
+
+        # Parse ELF header
+        self.elf = ELF(self.data)
+        self.t_addr   = self.elf.phdr[0].p_vaddr
+        self.t_len    = self.elf.phdr[0].p_filesz
+        self.t_off    = self.elf.phdr[0].p_off
+        self.d_addr   = self.elf.phdr[1].p_vaddr
+        self.d_len    = self.elf.phdr[1].p_filesz
+        self.d_off    = self.elf.phdr[1].p_off
 
     def _v_to_off(self, vaddr):
         """ Translate a virtual address into a file offset """
@@ -108,7 +111,7 @@ class binary(object):
             blk_data += decompress(self.data[cur+0x10:cur+0x10+blk_lzsize])
 
             # Move to the next block
-            blk_lzsize_aligned = (math.ceil(blk_lzsize / 0x10) * 0x10) + 0x10
+            blk_lzsize_aligned = (ceil(blk_lzsize / 0x10) * 0x10) + 0x10
             cur += blk_lzsize_aligned
             #print("{:08x}/{:08x} bytes read".format(len(blk_data), size))
 
@@ -156,4 +159,11 @@ class file_entry(object):
         """ Write the file to some folder """
         with open("{}/{}".format(path, self.filename), "wb") as f:
             f.write(self.data)
+
+    def print_info(self):
+        print("Filename: {}".format(self.filename))
+        print("  String address:   {:08x}".format(self.saddr))
+        print("  Data address:     {:08x}".format(self.daddr))
+        print("  File size:        {:08x}".format(self.size))
+        print("  Compressed size:  {:08x}".format(self.lzsize))
 
