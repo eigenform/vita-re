@@ -1,6 +1,7 @@
 *
 !.gitignore
-!sc3parse.py
+!vntools/
+!vntools/sc3parse.py
+!vntools/wa2recovr.py
+!vntools/psvself.py
 !undar
-!wa2recovr.py
-!psvself.py

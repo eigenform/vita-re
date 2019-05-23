@@ -22,8 +22,9 @@ from struct import pack, unpack
 from hexdump import hexdump
 from zlib import decompress
 from math import ceil
+import hashlib
 
-from psvself import *
+from vntools.psvself import *
 
 def hdprint(desc, data):
     """ Wrapper around hexdump output """
@@ -37,12 +38,12 @@ Containers for objects
 """
 
 class binary(object):
-    """ Simple container/parser for the binary """
-    def __init__(self, filename):
+    """ Simple container/parser for the binary. Takes some filename of a SELF,
+    and 'table_off', an offset to some array of entries in the binary. """
+    def __init__(self, filename, table_off):
         self.filename = filename
 
-        # Assume the entry table starts here
-        self.table_base_off = 0x00075ef0
+        self.table_base_off = table_off
         self.entries = []
 
         # Read an ELF file into memory
@@ -57,6 +58,10 @@ class binary(object):
         self.d_addr   = self.elf.phdr[1].p_vaddr
         self.d_len    = self.elf.phdr[1].p_filesz
         self.d_off    = self.elf.phdr[1].p_off
+
+        m = hashlib.sha256()
+        m.update(self.data)
+        self.sha256 = m.hexdigest()
 
     def _v_to_off(self, vaddr):
         """ Translate a virtual address into a file offset """
@@ -146,7 +151,7 @@ class binary(object):
 
 
 class file_entry(object):
-    """ Simple container for file entries """
+    """ Simple container for uncompressed file entries """
     def __init__(self, filename, data, saddr, daddr, size, lzsize):
         self.filename = filename
         self.data = data
@@ -154,6 +159,10 @@ class file_entry(object):
         self.daddr = daddr
         self.size = size
         self.lzsize = lzsize
+
+        m = hashlib.sha256()
+        m.update(self.data)
+        self.sha256 = m.hexdigest()
 
     def write(self, path):
         """ Write the file to some folder """
