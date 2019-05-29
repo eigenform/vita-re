@@ -2,7 +2,16 @@
 !.gitignore
 !vntools/
 !vntools/sc3parse.py
-!vntools/wa2recovr.py
+!vntools/wa2pack.py
 !vntools/wa2txt.py
 !vntools/psvself.py
+!reself/
+!reself/Makefile
+!reself/common.h
+!reself/elf.h
+!reself/main.c
+!reself/self.h
+!reself/sha256.c
+!reself/sha256.h
+!reself/LICENSE
 !undar
