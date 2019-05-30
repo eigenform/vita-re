@@ -22,12 +22,16 @@
 #define SHA256_DIGEST_LEN	0x20		// Size of a SHA256 hash
 #define METADATA_PAD_LEN	0x30		// Padding before metadata
 #define MAX_SEGMENTS		0x20		// Only support N segments
+#define EHDR_PAD_LEN		0x0c		// ELF header padding length
 
 u8 elf_digest[SHA256_DIGEST_LEN];		// SHA256 digest buffer
 u8 *lzdata_buf;					// zlib compression buffer
-u8 *self_file, *elf_file;			// User input buffers
+u8 *s_buf, *e_buf;			// User input buffers
 size_t self_len, elf_len;			// Size of user input
 u8 *seg_lzdata[MAX_SEGMENTS] = { NULL };	// Compressed segment buffers
+
+u8 metadata_pad[METADATA_PAD_LEN] = { 0 };	// A bunch of padding zeros
+u8 ehdr_pad[0xc] = { 0 };			// ...
 
 
 // Get the size of some file
@@ -62,7 +66,7 @@ size_t compress_segment(void *dst, void *src, size_t src_len)
 	res = compress(dst, &dst_len, src, src_len);
 	if (res != Z_OK)
 	{
-		fprintf(stderr, "zlib compress() returned %d for phdr\n", res);
+		printf("zlib compress() returned %d for phdr\n", res);
 		exit(-1);
 	}
 	return dst_len;
@@ -77,14 +81,12 @@ void sha256_digest(void *dst, size_t len, void *src)
 	sha256_final(&ctx, dst);
 }
 
-
-
 int main(int argc, const char **argv)
 {
 	if (argc != 4) 
 	{
-		fprintf(stdout, "usage: %s ", argv[0]);
-		fprintf(stdout, "<input SELF> <input ELF> <output SELF>\n");
+		printf("usage: %s ", argv[0]);
+		printf("<input SELF> <input ELF> <output SELF>\n");
 		exit(0);
 	}
 
@@ -92,100 +94,70 @@ int main(int argc, const char **argv)
 
 	self_len		= get_filesize(argv[1]);
 	elf_len			= get_filesize(argv[2]);
-	self_file		= read_file(argv[1], self_len);
-	elf_file		= read_file(argv[2], elf_len);
+	s_buf			= read_file(argv[1], self_len);
+	e_buf			= read_file(argv[2], elf_len);
 
-	sce_header *shdr	= (sce_header*)(self_file);
-	Elf32_Ehdr *ehdr	= (Elf32_Ehdr*)(elf_file);
-	Elf32_Ehdr *self_ehdr	= (Elf32_Ehdr*)(self_file + shdr->elf_offset);
-	Elf32_Phdr *elf_phdrs	= (Elf32_Phdr*)(elf_file + ehdr->e_phoff);
-	segment_info *snfo	= (segment_info*)(self_file + shdr->section_info_offset);
-	control_info *cnfo	= (control_info *)(self_file + shdr->controlinfo_offset);
+	sce_header *shdr	= (sce_header*)(s_buf);
+	Elf32_Ehdr *ehdr	= (Elf32_Ehdr*)(e_buf);
+	Elf32_Ehdr *self_ehdr	= (Elf32_Ehdr*)(s_buf + shdr->elf_off);
+	Elf32_Phdr *elf_phdrs	= (Elf32_Phdr*)(e_buf + ehdr->e_phoff);
 
-	/* Validate some aspects of the SELF/ELF headers on our user input:
-	 *	- Die if we can't validate magic bytes on either header
-	 *	- Refuse to support cases where we remove/add ELF segments
-	 */
+	seginfo *snfo	= (seginfo*)(s_buf + shdr->seginfo_off);
+	ctrlinfo *cnfo	= (ctrlinfo *)(s_buf + shdr->ctrlinfo_off);
 
-	if (memcmp(self_file, "\x53\x43\x45\x00", 4) != 0)
+
+	// Validate some user input before proceeding
+	if (memcmp(s_buf, "\x53\x43\x45\x00", 4) != 0)
 	{
-		fprintf(stderr, "%s is not a valid SELF file\n", argv[1]);
-		exit(-1);
+		printf("%s is not a valid SELF file\n", argv[1]); exit(-1);
 	}
-	if (memcmp(elf_file, "\x7f\x45\x4c\x46\x01\x01\x01", 7) != 0)
+	if (memcmp(e_buf, "\x7f\x45\x4c\x46\x01\x01\x01", 7) != 0)
 	{
-		fprintf(stderr, "%s is not a valid ELF file\n", argv[1]);
-		exit(-1);
+		printf("%s is not a valid ELF file\n", argv[1]); exit(-1);
 	}
 	if (ehdr->e_phnum != self_ehdr->e_phnum) 
 	{
-		fprintf(stderr, "The number of segments doesn't match\n");
-		fprintf(stderr, "(No support for adding/removing segments)\n");
-		exit(-1);
+		printf("The number of segments doesn't match\n"); exit(-1);
 	}
 	if (ehdr->e_phnum > MAX_SEGMENTS)
 	{
-		fprintf(stderr, "No support for files with more than %d segments (found %d)\n",
-				MAX_SEGMENTS, ehdr->e_phnum);
-		exit(-1);
-
+		printf("No support for >%d segments\n",MAX_SEGMENTS); exit(-1);
 	}
 
-	fprintf(stdout, "Read SELF file %s (%08x bytes)\n", argv[1], self_len);
-	fprintf(stdout, "Read ELF file %s (%08x bytes)\n", argv[2], elf_len);
+	printf("Got input %s (%08x bytes)\n", argv[1], self_len);
+	printf("Got input %s (%08x bytes)\n", argv[2], elf_len);
 
-	/* Re-compress all of the segments in the ELF file, and also write the 
-	 * new size of the segments into the corresponding section_info entry 
-	 * on the SELF header.
-	 */
-
-	// Embed the new ELF header into the SELF header
-	memcpy(self_file + shdr->elf_offset, elf_file, sizeof(Elf32_Ehdr));
-	memcpy(self_file + shdr->phdr_offset, (elf_file + ehdr->e_phoff), 
+	// Embed the new ELF header (from user input)
+	memcpy(s_buf + shdr->elf_off, e_buf, sizeof(Elf32_Ehdr));
+	memcpy(s_buf + shdr->phdr_off, (e_buf + ehdr->e_phoff), 
 			(ehdr->e_phentsize * ehdr->e_phnum));
 
-	// Compress all of the segments
+	// Re-compress all of the ELF segments
 	for (int i = 0; i < ehdr->e_phnum; i++) 
 	{
-		fprintf(stdout, "Got ELF segment %i\t[length=%08x, off=%08x]\n",
-			i, (u32)elf_phdrs[i].p_filesz, 
-			(u32)elf_phdrs[i].p_offset);
+		printf("Got segment %i\t[length=%08x, off=%08x]\n", i, 
+				(u32)elf_phdrs[i].p_filesz, 
+				(u32)elf_phdrs[i].p_offset);
 
-		fprintf(stdout, "Original SELF segment %i\t[length=%08x]\n", 
-				i, (u32)snfo[i].length);
+		printf("Original segment %i\t[length=%08x]\n", i, 
+				(u32)snfo[i].size);
 
-		size_t lz_len = compress_segment(
-			lzdata_buf, 
-			(elf_file + elf_phdrs[i].p_offset), 
-			elf_phdrs[i].p_filesz
-		);
+		u8 *src = e_buf + elf_phdrs[i].p_offset;
+		size_t lz_len = compress_segment(lzdata_buf, src,
+			elf_phdrs[i].p_filesz);
 
 		seg_lzdata[i] = (u8*)calloc(1, lz_len + 0x10);
 		memcpy(seg_lzdata[i], lzdata_buf, lz_len);
 
-		snfo[i].length = lz_len;
-		fprintf(stdout, "New SELF segment %i\t[length=%08x]\n", i, 
-				(u32)snfo[i].length);
+		snfo[i].size = lz_len;
+
+		printf("New segment %i\t[length=%08x]\n", i, (u32)snfo[i].size);
 	}
 
-	/* The control_info struct in the SELF contains a SHA256 digest of the
-	 * embedded ELF file. Re-compute SHA256 digest for the contents of the 
-	 * new ELF to-be-embedded in the SELF file output
-	 */
-
-	fprintf(stdout, "Old SHA256 digest: ");
-	for (int i = 0; i < SHA256_DIGEST_LEN; i++)
-		fprintf(stdout, "%02x", cnfo->elf_digest_info.elf_digest[i]);
-	fprintf(stdout, "\n");
-
-	sha256_digest(elf_digest, elf_len, elf_file);
-
-	fprintf(stdout, "New SHA256 digest: ");
-	for (int i = 0; i < SHA256_DIGEST_LEN; i++)
-		fprintf(stdout, "%02x", elf_digest[i]);
-	fprintf(stdout, "\n");
-	
-	while(cnfo->next) {
+	// Recompute SHA256 digest over contents of the new ELF to-be-embedded
+	sha256_digest(elf_digest, elf_len, e_buf);
+	while(cnfo->next) 
+	{
 		switch(cnfo->type) {
 		case 4:
 			memcpy(cnfo->elf_digest_info.elf_digest, &elf_digest, 
@@ -195,47 +167,46 @@ int main(int argc, const char **argv)
 			memset(&cnfo->npdrm_info, 0, sizeof(cnfo->npdrm_info));
 			break;
 		}
-		cnfo = (control_info*)((char*)cnfo + cnfo->size);
+		cnfo = (ctrlinfo*)((char*)cnfo + cnfo->size);
 	}
 
 
-	/* Flush the new SELF file to disk step-by-step, then fix up some of
-	 * the fields in the new SELF header afterwards. */
 	
 	FILE *fout = fopen(argv[3], "wb");
 
-	fwrite(self_file, sizeof(sce_header), 1, fout);
-	fwrite(self_file + shdr->appinfo_offset, sizeof(sce_appinfo), 1, fout);
+	u8 *src = s_buf;
+	fwrite(src, sizeof(sce_header), 1, fout);
+	src = s_buf + shdr->appinfo_off;
+	fwrite(src, sizeof(sce_appinfo), 1, fout);
 
-	fwrite(self_file + shdr->elf_offset, sizeof(Elf32_Ehdr), 1, fout);
-	u8 ehdr_pad[0xc] = { 0 };
+	src = s_buf + shdr->elf_off;
+	fwrite(src, sizeof(Elf32_Ehdr), 1, fout);
 	fwrite(&ehdr_pad, 0xc, 1, fout);
-	fwrite(self_file + shdr->phdr_offset, ehdr->e_phentsize, 
-			ehdr->e_phnum, fout);
+	src = s_buf + shdr->phdr_off;
+	fwrite(src, ehdr->e_phentsize, ehdr->e_phnum, fout);
+	
+	src = s_buf + shdr->seginfo_off;
+	fwrite(src, sizeof(seginfo), ehdr->e_phnum, fout);
+	src = s_buf + shdr->sceversion_off;
+	fwrite(src, sizeof(sce_version), 1, fout);
+	src = s_buf + shdr->ctrlinfo_off;
+	fwrite(src, shdr->ctrlinfo_size, 1, fout);
 
-	fwrite(self_file + shdr->section_info_offset, sizeof(segment_info), 
-			ehdr->e_phnum, fout);
-	fwrite(self_file + shdr->sceversion_offset, sizeof(sce_version), 1, 
-			fout);
-	fwrite(self_file + shdr->controlinfo_offset, shdr->controlinfo_size, 1, 
-			fout);
-
-	int cm_pad_len = shdr->metadata_offset - 
-		(shdr->controlinfo_offset + shdr->controlinfo_size);
+	int ctrlinfo_tail = shdr->ctrlinfo_off + shdr->ctrlinfo_size;
+	int cm_pad_len = shdr->metadata_off - ctrlinfo_tail;
 	u8 *cm_padding = calloc(1, cm_pad_len);
 	fwrite(cm_padding, cm_pad_len, 1, fout);
 	free(cm_padding);
 
-	u8 metadata_pad[METADATA_PAD_LEN] = { 0 };
 	fwrite(&metadata_pad, METADATA_PAD_LEN, 1, fout);
 
-	int metadata_len = shdr->header_len - 
-		shdr->metadata_offset - METADATA_PAD_LEN;
-	fwrite(self_file + shdr->metadata_offset + METADATA_PAD_LEN, 
-			metadata_len, 1, fout);
+	int metadata_len = shdr->header_len - shdr->metadata_off - 
+		METADATA_PAD_LEN;
+	src = s_buf + shdr->metadata_off + METADATA_PAD_LEN;
+	fwrite(src, metadata_len, 1, fout);
 
-	// `vita-inject-elf` writes the plaintext header here
-	fwrite(elf_file, elf_phdrs[0].p_offset, 1, fout);
+	// Just write the plaintext header (?)
+	fwrite(e_buf, elf_phdrs[0].p_offset, 1, fout);
 
 	// Compressed segment data is aligned to 0x10-byte boundaries
 	u64 current_pos, aligned_pos;
@@ -244,27 +215,34 @@ int main(int argc, const char **argv)
 		current_pos = ftell(fout);
 		aligned_pos = ((current_pos + 0x10 - 1) / 0x10) * 0x10;
 		fseek(fout, aligned_pos, SEEK_SET);
-		snfo[i].offset = aligned_pos;
-		fwrite(seg_lzdata[i], snfo[i].length, 1, fout);
+		snfo[i].off = aligned_pos;
+		fwrite(seg_lzdata[i], snfo[i].size, 1, fout);
 	}
 
-	// Correct the segment_info entry offsets in the SELF header
-	fseek(fout, shdr->section_info_offset, SEEK_SET);
-	fwrite(self_file + shdr->section_info_offset, sizeof(segment_info), 
+	// Correct the seginfo entry offsets in the SELF header
+	fseek(fout, shdr->seginfo_off, SEEK_SET);
+	fwrite(s_buf + shdr->seginfo_off, sizeof(seginfo), 
 			ehdr->e_phnum, fout);
 
-	// Correct the total filesize in the SELF header
+	// Correct the total SELF filesize in the SELF header
 	fseek(fout, 0, SEEK_END);
 	u64 self_filesize  = ftell(fout);
 	fseek(fout, 0x20, SEEK_SET);
 	fwrite(&self_filesize, sizeof(self_filesize), 1, fout);
-	fseek(fout, 0, SEEK_END);
 
+
+	// Correct the total ELF filesize in the SELF header
+	fseek(fout, 0x18, SEEK_SET);
+	u64 elf_filesize = elf_len;
+	fwrite(&elf_filesize, sizeof(elf_filesize), 1, fout);
+
+
+	fseek(fout, 0, SEEK_END);
 	fclose(fout);
-	fprintf(stdout, "Wrote new file to %s (%08x bytes)\n", argv[3], 
+	printf("Wrote new file to %s (%08x bytes)\n", argv[3], 
 			self_filesize);
-	free(self_file);
-	free(elf_file);
+	free(s_buf);
+	free(e_buf);
 	free(lzdata_buf);
 	for (int i = 0; i < MAX_SEGMENTS; i++)
 	{

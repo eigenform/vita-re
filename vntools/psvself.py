@@ -63,12 +63,21 @@ class ELF(object):
         # Parse ELF header
         self.elf_header = elf_header(data[0x00:ELF_HEADER_SIZE])
 
+        # Keep self.orig_phdr around for reference when necessary.
+        # You need to create two seperate objects for this.
+
+        self.orig_phdr = []
         self.phdr = []
+
         phdr_head = self.elf_header.e_phoff
         for i in range(0, self.elf_header.e_phnum):
-            p = phdr(data[phdr_head:phdr_head+ELF_PH_SIZE])
-            self.phdr.append(p)
+            mutable_p = phdr(data[phdr_head:phdr_head+ELF_PH_SIZE])
+            saved_p = phdr(data[phdr_head:phdr_head+ELF_PH_SIZE])
+            self.phdr.append(mutable_p)
+            self.orig_phdr.append(saved_p)
             phdr_head += ELF_PH_SIZE
+
+        # Save a copy of the original phdrs
 
     def read(self):
         """ Read the bytearray() representation of the ELF headers at some instant"""
@@ -87,9 +96,9 @@ class elf_header(object):
         self.e_type, self.e_machine = unpack("<HH", data[0x10:0x14])
         self.e_version, self.e_entry = unpack("<LL", data[0x14:0x1c])
         self.e_phoff, self.e_shoff = unpack("<LL", data[0x1c:0x24])
-        self.e_flags = unpack("<L", data[0x24:0x28])
+        self.e_flags = unpack("<L", data[0x24:0x28])[0]
         self.e_ehsize, self.e_phentsize = unpack("<HH", data[0x28:0x2c])
-        self.e_phnum, e_shentsize = unpack("<HH", data[0x2c:0x30])
+        self.e_phnum, self.e_shentsize = unpack("<HH", data[0x2c:0x30])
         self.e_shnum, self.e_shstrndx = unpack("<HH", data[0x30:0x34])
 
     def read(self):

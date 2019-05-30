@@ -10,20 +10,20 @@ typedef struct __attribute__((packed))
 	u32 version;               /* header version 3*/
 	u16 sdk_type;              /* */
 	u16 header_type;           /* 1 self, 2 unknown, 3 pkg */
-	u32 metadata_offset;       /* metadata offset */
+	u32 metadata_off;       /* metadata offset */
 	u64 header_len;            /* self header length */
 	u64 elf_filesize;          /* ELF file length */
 	u64 self_filesize;         /* SELF file length */
 	u64 unknown;               /* UNKNOWN */
-	u64 self_offset;           /* SELF offset */
-	u64 appinfo_offset;        /* app info offset */
-	u64 elf_offset;            /* ELF #1 offset */
-	u64 phdr_offset;           /* program header offset */
-	u64 shdr_offset;           /* section header offset */
-	u64 section_info_offset;   /* section info offset */
-	u64 sceversion_offset;     /* version offset */
-	u64 controlinfo_offset;    /* control info offset */
-	u64 controlinfo_size;      /* control info size */
+	u64 self_off;           /* SELF offset */
+	u64 appinfo_off;        /* app info offset */
+	u64 elf_off;            /* ELF #1 offset */
+	u64 phdr_off;           /* program header offset */
+	u64 shdr_off;           /* section header offset */
+	u64 seginfo_off;   /* section info offset */
+	u64 sceversion_off;     /* version offset */
+	u64 ctrlinfo_off;    /* control info offset */
+	u64 ctrlinfo_size;      /* control info size */
 	u64 padding;
 } sce_header;
 
@@ -100,13 +100,13 @@ typedef struct __attribute__((packed))
 			u8 shared_secret_3[0x10];
 		} shared_secret_info;
 	};
-} control_info;
+} ctrlinfo;
 
 typedef struct __attribute__((packed))
 {
-	u64 offset;
-	u64 length;
+	u64 off;
+	u64 size;
 	u64 compression; // 1 = uncompressed, 2 = compressed
 	u64 encryption;  // 1 = encrypted, 2 = plain
-} segment_info;
+} seginfo;
 

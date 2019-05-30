@@ -24,12 +24,19 @@ class binary(object):
 
         # Read an ELF file into memory
         with open(filename, "rb") as f: 
-            self.data = f.read()
+            self.data = bytearray(f.read())
+
+        self.elf    = ELF(self.data)
+
+        #assert self.v2off(0x81000000) == 0x000000c0
+        #assert self.v2off(0x81079000) == 0x00078b00
+        #assert self.v2off(0x00000000) == 0x0044d090
+        #assert self.off2v(0x000000c0) == 0x81000000
+        #assert self.off2v(0x00078b00) == 0x81079000
+        #assert self.off2v(0x0044d090) == 0x00000000
+        #exit()
 
         print("[*] Read {} ({}) bytes".format(filename, hex(len(self.data))))
-
-        # First, parse the ELF headers 
-        self._parse_headers()
 
         # Read the entry table in the binary. This will create our initial
         # representation of all compressed data, decompressed data, etc.
@@ -39,44 +46,27 @@ class binary(object):
     # -------------------------------------------------------------------------
     # Helper functions
 
-    def _parse_headers(self):
-        """ Update our representation of the ELF headers """ 
-        self.elf    = ELF(self.data)
+    def v2off(self, vaddr):
+        """ Map a virtual address into an offset """
+        for phdr in self.elf.phdr:
+            base = phdr.p_vaddr
+            tail = phdr.p_vaddr + phdr.p_filesz
+            if ((vaddr >= base) and (vaddr <= tail)):
+                return phdr.p_off + (vaddr - phdr.p_vaddr)
+        raise Exception("Couldn't map vaddr {:08x}".format(vaddr))
 
-        self.t_addr = self.elf.phdr[0].p_vaddr
-        self.t_len  = self.elf.phdr[0].p_filesz
-        self.t_off  = self.elf.phdr[0].p_off
-        self.d_addr = self.elf.phdr[1].p_vaddr
-        self.d_len  = self.elf.phdr[1].p_filesz
-        self.d_off  = self.elf.phdr[1].p_off
-
-    def _v_to_off(self, vaddr):
-        """ Translate a virtual address into a file offset.
-        Fix these later to actually use underlying phdr data. """
-        if ((vaddr >= self.t_addr) and (vaddr < (self.t_addr + self.t_len))):
-            return (self.t_off + (vaddr - self.t_addr))
-        if ((vaddr >= (self.t_addr + self.t_len)) and (vaddr < self.d_addr)):
-            raise Exception("There's no mapping for this virtual address")
-        if ((vaddr >= self.d_addr) and (vaddr < (self.d_addr + self.d_len))):
-            return ((vaddr - self.t_addr) - 0x500)
-        if (vaddr >= (self.d_addr + self.d_len)):
-            raise Exception("There's no mapping for this virtual address")
-
-    def _off_to_v(self, offset): 
-        """ Translate a file offset into a virtual address.
-        Fix these later to actually use underlying phdr data. """
-        if (offset < self.t_off):
-            raise Exception("There's no virtual address for this offset")
-        if ((offset >= self.t_off) and (offset < self.d_off)):
-            return ((self.t_addr + offset) - self.t_off) 
-        if ((offset >= self.d_off) and (offset < 0x0044d090)):
-            return ((self.t_addr + offset) + 0x500) 
-        if (offset >= (self.d_off + self.d_len)):
-            raise Exception("There's no virtual address for this offset")
+    def off2v(self, offset):
+        """ Map an offset into a virtual address """
+        for phdr in self.elf.phdr:
+            base = phdr.p_off
+            tail = phdr.p_off + phdr.p_filesz
+            if ((offset >= base) and (offset <= tail)):
+                return phdr.p_vaddr + (offset - phdr.p_off)
+        raise Exception("Couldn't map offset {:08x}".format(offset))
 
     def _recover_string(self, vaddr):
         """ Given some virtual address, recover a string from the binary """
-        cur = self._v_to_off(vaddr)
+        cur = self.v2off(vaddr)
         name = bytearray()
         while True:
             char = unpack("<1s", self.data[cur:cur+1])[0]
@@ -89,7 +79,7 @@ class binary(object):
     # -------------------------------------------------------------------------
     # Entry table operations
 
-    def _read_entry_table(self):
+    def _read_entry_table(self, decompress=False):
         """ Read the binary and update and return our own representation of 
         the current entry table (an array of entry() objects). 
 
@@ -102,7 +92,7 @@ class binary(object):
         self.entry_table = []
         while True:
             # Read an entry from the binary
-            header_vaddr = self._off_to_v(cur)
+            header_vaddr = self.off2v(cur)
             header_data = self.data[cur:cur+0x10]
             saddr, daddr, size, lzsize = unpack("<4I", header_data)
 
@@ -129,13 +119,12 @@ class binary(object):
 
         return self.entry_table
 
-    def rebuild_entry_table(self):
-        """ Iterate through entries and check if they're dirty. If so, rebuild
-        the compressed data and fix the sizes associated with this entry. """
+    def recompress_entry_table(self):
+        """ Iterate through all raw files in the entry table and re-build the
+        compressed data for each file. If an entry is marked as dirty, rewrite
+        the compressed data and compressed length fields in the object """
         for e in self.entry_table:
             assert e.size == len(e.raw_data)
-
-            print("Rebuilding entry for '{}'".format(e.filename))
 
             # Setup some state for the compressor
             remaining = len(e.raw_data)
@@ -179,30 +168,78 @@ class binary(object):
             assert cur == len(e.raw_data)
             assert remaining == 0
 
-            # If this block isn't dirty, just do nothing?
+            # If this entry isn't marked dirty, just do nothing?
             if (e.dirty == False):
                 assert new_lz_data == e.lz_data
 
-            # Otherwise, fix up the entry fields that we know about
+            # If the entry is marked as dirty, update some of the fields
             else:
-                if (new_lz_data != e.lz_data):
-                    print("Compressed data changed!")
-                    e.lz_data = new_lz_data
-                    e.lzsize = len(new_lz_data)
-                    e.daddr = None
-           
+                assert new_lz_data != e.lz_data
+                print("Rebuilt entry for '{}'".format(e.filename))
+                print("old_lzsize={:08x}, new_lzsize={:08x}".format(e.lzsize,
+                    len(new_lz_data)))
 
+                e.lz_data = new_lz_data
+                e.lzsize = len(new_lz_data)
+       
+    def rebuild_entry_table(self, dirty_base_vaddr):
+        """ Iterate over all entries and potentially re-compute the 'daddr'. 
+        For clean entries, make no changes to the entry. Use virtual address
+        'base_vaddr' as the start of a new region of contiguous compressed
+        data (the destination for all dirty entries). I assume that we can
+        leave the saddr fields untouched for all entries. """ 
 
-    def write_entry_table(self, entry_table):
-        """ Given an array of entry() objects, write them back to underlying
-        binary data. After writing, re-update our internal representation and 
-        return the new array of entry() objects. """
-        assert len(entry_table) == len(self.entry_table)
+        new_daddr = dirty_base_vaddr
+        for e in self.entry_table:
+            # Make no changes for unmodified entries
+            if (e.dirty == False):
+                continue
+            else:
+                print("Fixing daddr for '{}' [{:08x} -> {:08x}]".format(
+                    e.filename, e.daddr, new_daddr))
+                e.daddr = new_daddr
+                new_daddr += e.lzsize
+
+    def write_entry_metadata(self):
+        """ Write all entry fields back to the underlying data """
         cur = self.entry_table_offset
-        for e in entry_table:
+        for e in self.entry_table:
             header_data = pack("<4I", e.saddr, e.daddr, e.size, e.lzsize)
             self.data[cur+0x00:cur+0x10] = header_data
-        return self._read_entry_table()
+            cur += 0x10
+
+    def rebuild_elf_headers(self):
+        data = bytearray()
+        data += self.elf.elf_header.magic
+        data += self.elf.elf_header.type
+
+        data += pack("<HH", self.elf.elf_header.e_type, 
+                self.elf.elf_header.e_machine)
+        data += pack("<LL", self.elf.elf_header.e_version, 
+                self.elf.elf_header.e_entry)
+        data += pack("<LL", self.elf.elf_header.e_phoff, 
+                self.elf.elf_header.e_shoff)
+
+        data += pack("<L", self.elf.elf_header.e_flags)
+
+        data += pack("<HH", self.elf.elf_header.e_ehsize, 
+                self.elf.elf_header.e_phentsize)
+        data += pack("<HH", self.elf.elf_header.e_phnum, 
+                self.elf.elf_header.e_shentsize)
+        data += pack("<HH", self.elf.elf_header.e_shnum, 
+                self.elf.elf_header.e_shstrndx)
+
+        for phdr in self.elf.phdr:
+            data += pack("<LL", phdr.p_type, phdr.p_off)
+            data += pack("<LL", phdr.p_vaddr, phdr.p_paddr)
+            data += pack("<LL", phdr.p_filesz, phdr.p_memsz)
+            data += pack("<LL", phdr.p_flags, phdr.p_align)
+
+        data += b'\x00' * (self.elf.phdr[0].p_off - len(data))
+        assert len(data) == self.elf.phdr[0].p_off
+        self.data[0x00:self.elf.phdr[0].p_off] = data
+
+
 
     # -------------------------------------------------------------------------
     # Compressed data (note everything is aligned to 0x10-byte boundaries)
@@ -210,7 +247,7 @@ class binary(object):
     def _read_lzdata(self, daddr, lzsize):
         """ Given a base address and size, read a compressed file and return
         a bytearray() containing all of the compressed data """
-        cur = self._v_to_off(daddr)
+        cur = self.v2off(daddr)
         lzdata = bytearray()
         while True:
             if (len(lzdata) >= lzsize): break
@@ -265,7 +302,8 @@ class entry(object):
     """ Container for a file entry. These may be modified by the user, so we
     need some way of (a) telling if they're dirty, and (b) rebuilding the
     entire set of associated objects when they're changed """
-    def __init__(self, header_data, header_vaddr, saddr, daddr, size, lzsize, filename, lz_data, raw_data):
+    def __init__(self, header_data, header_vaddr, saddr, daddr, size, lzsize, 
+            filename, lz_data, raw_data):
         assert len(lz_data) == lzsize
         assert len(raw_data) == size
 
@@ -296,7 +334,8 @@ class entry(object):
         base = 0
         cur = 0
         while True:
-            if ((cur >= len(self.raw_data)) or (base >= len(self.raw_data))): break
+            if ((cur >= len(self.raw_data)) or (base >= len(self.raw_data))):
+                break
             while True:
                 if (cur >= len(self.raw_data)): break
                 if (self.raw_data[cur:cur+1] == b'\x2c'):
@@ -320,13 +359,9 @@ class entry(object):
         for string in dstrings:
             self.raw_data += string.data
 
+        # Recompute the size of the raw file and mark the entry as dirty
         if (self.raw_data != old_data):
-            # Recompute the size of the raw file
             self.size = len(self.raw_data)
-
-            # Mark the entry as dirty (we need to re-create compressed data)
-            #self.lz_data = bytearray()
-            #self.daddr = None
             self.dirty = True
 
         return self.read_strings()
