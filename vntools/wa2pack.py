@@ -2,7 +2,7 @@
 """ wa2pack.py
 """
 
-from vntools.psvself import *
+from .psvself import *
 
 from sys import argv
 from struct import pack, unpack
