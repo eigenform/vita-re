@@ -20,14 +20,14 @@ OUTPUT_PATH = "/tmp/data/{}.{}"
 
 def get_extension(data):
     """ Get a suitable file extension """
-        if (data[0:4] == b'GXT\x00'):
-            return "gxt"
-        elif (data[0:4] == b'RIFF'):
-            return "riff"
-        elif (data[0:4] == b'INAS'):
-            return "inas"
-        else:
-            return "bin"
+    if (data[0:4] == b'GXT\x00'):
+        return "gxt"
+    elif (data[0:4] == b'RIFF'):
+        return "riff"
+    elif (data[0:4] == b'INAS'):
+        return "inas"
+    else:
+        return "bin"
 
 def get_entry(data, size, lzsize, offset, name, compressed=True):
     print("##### Entry {} ####################".format(name))

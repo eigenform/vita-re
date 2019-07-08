@@ -1,0 +1,105 @@
+#!/usr/bin/python3
+""" undat - parse [some particular] DAT archives
+struct dat_hdr { char magic[4]; u32 sz; u32 unk; u32 num_ent; };
+struct dat_entry { u32 is_compressed?; u32 off; u32 sz; u32 fn_off; };
+struct dat_fn { u32 sz; char fn[sz]; };
+"""
+
+from sys import argv
+from struct import pack, unpack
+from hexdump import hexdump
+from os import mkdir, chdir, getcwd, path
+import gzip
+
+MAGIC_DAT   = b'GPDA'
+MAGIC_GZIP  = b'\x1f\x8b'
+
+def dump(data, idt):
+    indent = ' ' * idt
+    for line in hexdump(data, result='generator'):
+        print("{}{}".format(indent, line))
+
+class dfile(object):
+    def __init__(self, level, data, size, filename, parent_filename):
+        self.data = data
+        self.size = size
+        self.fn = filename.replace(' ', '')
+        if (parent_filename != filename):
+            self.full_fn = "{}__{}".format(parent_filename, self.fn)
+        else:
+            self.full_fn = self.fn
+        self.lvl = level
+        idt = ' ' * self.lvl
+        assert self.size == len(self.data)
+        print("{}{},size={:08x}".format(idt, self.full_fn, self.size))
+        #dump(self.data[0:0x40], self.lvl+1)
+
+class gz(object):
+    def __init__(self, level, data, size, filename):
+        self.child = None
+        self.data = data
+        assert self.data[0x00:0x02] == MAGIC_GZIP
+        self.size = size
+        self.fn = filename.replace(' ', '')
+        self.lvl = level
+        idt = ' ' * self.lvl
+        print("{}{},size={:08x}".format(idt, self.fn, self.size))
+        assert self.size == len(self.data)
+        self.raw_data = gzip.decompress(self.data)
+        self.raw_size = len(self.raw_data)
+        if (self.raw_data[0x00:0x04] == MAGIC_DAT):
+            self.child = dat(self.lvl+2, self.raw_data, self.raw_size, self.fn)
+        elif (self.raw_data[0x00:0x02] == MAGIC_GZIP):
+            self.child = gz(self.lvl+2, self.raw_data, self.raw_size, self.fn)
+        else:
+            self.child = dfile(self.lvl+2, self.raw_data, self.raw_size, self.fn,
+                    self.fn)
+
+class dat(object):
+    def __init__(self, level, data, size, filename):
+        self.data = data
+        assert data[0x00:0x04] == MAGIC_DAT
+        self.lvl = level
+        self.size = size
+        self.fn = filename
+        idt = ' ' * self.lvl
+        print("{}{},size={:08x}".format(idt, self.fn, self.size))
+        self.entries = self._get_entries()
+
+    def _get_entries(self):
+        """ Return a list of objects which are entries in this DAT """
+        size = unpack("<L", self.data[0x04:0x08])[0]
+        num_entries = unpack("<L", self.data[0x0c:0x10])[0]
+        assert size == self.size
+
+        cur = 0x10
+        entries = []
+        for idx in range(0, num_entries):
+            off, unk, sz, fn_off = unpack("<LLLL", self.data[cur:cur+0x10])
+            fn = self._get_fn(fn_off)
+            if (self.data[off+0x00:off+0x04] == MAGIC_DAT):
+                ent = dat(self.lvl+2, self.data[off:off+sz], sz, fn)
+            elif (self.data[off+0x00:off+0x02] == MAGIC_GZIP):
+                ent = gz(self.lvl+2, self.data[off:off+sz], sz, fn)
+            else:
+                ent = dfile(self.lvl+2, self.data[off:off+sz], sz, fn, self.fn)
+            entries.append(ent)
+            cur += 0x10
+        return entries
+
+    def _get_fn(self, off):
+        """ Return a filename string """
+        sz = unpack("<L", self.data[off:off+0x04])[0]
+        return self.data[off+0x04:off+0x04+sz].decode('utf8').replace(" ", "")
+            
+
+# -----------------------------------------------------------------------------
+
+if (len(argv) < 2):
+    print("./undat <.dat archive>")
+    exit(0)
+
+user_data = bytearray()
+with open(argv[1], "rb") as f: user_data = f.read()
+resource_dat = dat(0, user_data, len(user_data), "resource_dat")
+
