@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+""" unroll-bootimage - unpack a bootimage, writing all the binaries to $PWD
+
+Table entries of the form:
+
+    struct entry
+    {
+        u32 filename_offset;
+        u32 data_offset;
+        u32 data_len;
+    };
+
+Offsets in entries are encoded as virtual addresses. You can convert these to
+file offsets by doing ((vaddr & 0x00ffffff) + first_section_off). The table 
+seems to start at (first_section_off + 0xe4).
+"""
+
+from struct import pack, unpack
+from hexdump import hexdump
+
+ENTRY_SIZE  = 0xc
+TABLE_OFF = 0xe4
+
+def v2off(vaddr):
+    return ((vaddr & 0x00ffffff) + BASE_OFF)
+
+def get_string(base):
+    end = base;
+    while True:
+        if (data[end:end+1] == b'\x00'): break
+        end += 1
+    return data[base:end].decode('utf8')
+
+with open("bootimage.elf", "rb") as f:
+    data = f.read()
+
+BASE_OFF = unpack("<L", data[0x38:0x3c])[0]
+CUR = BASE_OFF + TABLE_OFF
+
+print("First segment at offset {:08x}".format(BASE_OFF))
+print("Table at offset {:08x}".format(CUR))
+
+while True:
+    fvaddr, dvaddr, dlen = unpack("<LLL", data[CUR:CUR+0xc])
+    if ((fvaddr == 0) and (dvaddr == 0) and (dlen == 0)):
+        break
+
+    fn = get_string(v2off(fvaddr)).split("/")[1]
+    doff = v2off(dvaddr)
+    assert (data[doff:doff+4] == b'\x7fELF')
+    print("Module '{}' at offset {:08x} (len={:08x})".format(fn, doff, dlen))
+
+    outfile = fn.replace("skprx", "elf")
+    with open(outfile, "wb") as f:
+        f.write(data[doff:doff+dlen])
+    CUR += ENTRY_SIZE;

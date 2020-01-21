@@ -14,5 +14,7 @@
 !reself/sha256.c
 !reself/sha256.h
 !reself/LICENSE
+!magic-082819.py
 !undar
 !undat
+!unroll-bootimage
